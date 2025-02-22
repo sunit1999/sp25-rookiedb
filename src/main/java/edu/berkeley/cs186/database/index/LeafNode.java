@@ -163,8 +163,42 @@ class LeafNode extends BPlusNode {
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        int index = Collections.binarySearch(keys, key);
+        if (index >= 0) {
+            throw new BPlusTreeException("Cannot insert duplicate key");
+        }
 
-        return Optional.empty();
+        // Try inserting new data
+        int insertionPoint = -1 * (index + 1);
+        keys.add(insertionPoint, key);
+        rids.add(insertionPoint, rid);
+
+        // Case 1: No overflow
+        int d = metadata.getOrder();
+        if (keys.size() <= 2 * d) {
+            sync();
+            return Optional.empty();
+        }
+
+        // Case 2: Overflow
+        // Split into d and d + 1
+        List<DataBox> firstDKeys = new ArrayList<>(keys.subList(0, d));
+        List<RecordId> firstDRids = new ArrayList<>(rids.subList(0, d));
+
+        List<DataBox> restKeys = new ArrayList<>(keys.subList(d, keys.size()));
+        List<RecordId> restRids = new ArrayList<>(rids.subList(d, rids.size()));
+
+        // Create new Leaf with d + 1 keys
+        LeafNode newLeaf = new LeafNode(metadata, bufferManager, restKeys, restRids, rightSibling, treeContext);
+
+        // Adjust old leaf
+        keys = firstDKeys;
+        rids = firstDRids;
+        rightSibling = Optional.of(newLeaf.page.getPageNum());
+
+        sync();
+        // Return new leaf's first key and pageno
+        return Optional.of(new Pair<>(restKeys.get(0), newLeaf.page.getPageNum()));
     }
 
     // See BPlusNode.bulkLoad.

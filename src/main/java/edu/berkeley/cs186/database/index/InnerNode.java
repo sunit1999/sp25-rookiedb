@@ -81,7 +81,7 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
-        int index = Collections.binarySearch(getKeys(), key);
+        int index = Collections.binarySearch(keys, key);
 
         int childIndex;
         if (index < 0) {
@@ -107,8 +107,68 @@ class InnerNode extends BPlusNode {
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
         // TODO(proj2): implement
+        // Find child node
+        int index = Collections.binarySearch(keys, key);
 
-        return Optional.empty();
+        int childIndex;
+        if (index < 0) {
+            childIndex = -1 * (index + 1); // Basically insertion point
+        } else {
+            childIndex = index + 1;
+        }
+
+        BPlusNode child = getChild(childIndex);
+
+        // Put data in child
+        Optional<Pair<DataBox, Long>> result = child.put(key, rid);
+
+        // If empty result, no splitting in child
+        if (!result.isPresent()) {
+            sync();
+            return Optional.empty();
+        }
+
+        // Otherwise, get orphan's data
+        DataBox orphanKey = result.get().getFirst();
+        Long orphanPageNum = result.get().getSecond();
+
+        int orphanKeyIndex = Collections.binarySearch(keys, orphanKey);
+        if (orphanKeyIndex >= 0) {
+            throw new BPlusTreeException("Cannot insert duplicate key");
+        }
+        orphanKeyIndex = -1 * (orphanKeyIndex + 1);
+
+        // Adjust orphan
+        keys.add(orphanKeyIndex, orphanKey);
+        children.add(orphanKeyIndex + 1, orphanPageNum);
+
+        // Case 1: No Overflow
+        int d = metadata.getOrder();
+        if (keys.size() <= 2 * d) {
+            sync();
+            return Optional.empty();
+        }
+
+        // Case 2: Overflow
+        // Split keys -> d, split key, d
+        // Split children equally -> d + 1, d + 1
+        List<DataBox> firstDKeys = new ArrayList<>(keys.subList(0, d));
+        List<Long> firstHalfChildren = new ArrayList<>(children.subList(0, children.size()/2));
+
+        List<DataBox> restKeys = new ArrayList<>(keys.subList(d, keys.size()));
+        List<Long> restHalfChildren = new ArrayList<>(children.subList(children.size()/2, children.size()));
+
+        // Move split key
+        DataBox innerNodeSplitKey = restKeys.remove(0);
+        InnerNode newInnerNode = new InnerNode(metadata, bufferManager, restKeys, restHalfChildren, treeContext);
+
+        // Adjust old inner node
+        keys = firstDKeys;
+        children = firstHalfChildren;
+
+        sync();
+        // Return split key, new node's pageno
+        return Optional.of(new Pair<>(innerNodeSplitKey, newInnerNode.page.getPageNum()));
     }
 
     // See BPlusNode.bulkLoad.
