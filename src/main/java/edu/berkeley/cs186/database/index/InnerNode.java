@@ -81,8 +81,17 @@ class InnerNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
+        int index = Collections.binarySearch(getKeys(), key);
 
-        return null;
+        int childIndex;
+        if (index < 0) {
+            childIndex = -1 * (index + 1); // Basically insertion point
+        } else {
+            childIndex = index + 1;
+        }
+
+        // Child can be InnerNode, so call `get` recursively
+        return getChild(childIndex).get(key);
     }
 
     // See BPlusNode.getLeftmostLeaf.

@@ -146,8 +146,14 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): implement
+        LeafNode leafNode = root.get(key);
+        int index = Collections.binarySearch(leafNode.getKeys(), key);
 
-        return Optional.empty();
+        if (index < 0) {
+            return Optional.empty();
+        }
+
+        return Optional.of(leafNode.getRids().get(index));
     }
 
     /**
