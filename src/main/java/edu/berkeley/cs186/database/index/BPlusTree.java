@@ -339,6 +339,7 @@ public class BPlusTree {
 
         // TODO(proj2): implement
 
+        root.remove(key);
         return;
     }
 
