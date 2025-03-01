@@ -206,7 +206,47 @@ class LeafNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        int maxEntries = (int) Math.ceil(2 * metadata.getOrder() * fillFactor);
 
+        while (data.hasNext()) {
+            Pair<DataBox, RecordId> pair = data.next();
+            DataBox key = pair.getFirst();
+            RecordId rid = pair.getSecond();
+            if (!keys.isEmpty()) {
+                DataBox prevKey = keys.get(keys.size()-1);
+                if (prevKey.compareTo(key) > 0) {
+                    throw new BPlusTreeException("Bulk loading expects sorted keys");
+                }
+            }
+            keys.add(key);
+            rids.add(rid);
+
+            // Case 1: No overflow, keep on adding
+            if (keys.size() <= maxEntries) {
+                continue;
+            }
+
+            // Case 2: Overflow, split and return
+            // Split -> [total - 1] and [1]
+            List<DataBox> restKeys = new ArrayList<>();
+            restKeys.add(keys.get(keys.size() - 1));
+
+            List<RecordId> restRids = new ArrayList<>();
+            restRids.add(rids.get(rids.size() - 1));
+
+            // Create new Leaf with 1 key
+            LeafNode newLeaf = new LeafNode(metadata, bufferManager, restKeys, restRids, rightSibling, treeContext);
+
+            // Adjust old leaf
+            keys.remove(keys.size() - 1);
+            rids.remove(rids.size() - 1);
+            rightSibling = Optional.of(newLeaf.page.getPageNum());
+
+            sync();
+            return Optional.of(new Pair<>(restKeys.get(0), newLeaf.page.getPageNum()));
+        }
+
+        sync();
         return Optional.empty();
     }
 

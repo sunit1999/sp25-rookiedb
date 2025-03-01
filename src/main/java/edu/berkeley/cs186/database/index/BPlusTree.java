@@ -318,7 +318,24 @@ public class BPlusTree {
         // Note: You should NOT update the root variable directly.
         // Use the provided updateRoot() helper method to change
         // the tree's root if the old root splits.
+        if (scanAll().hasNext()) {
+            throw new BPlusTreeException("Tree must be empty before bulk loading");
+        }
 
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> result = root.bulkLoad(data, fillFactor);
+
+            if (!result.isPresent()) {
+                continue; // No new root
+            }
+
+            // Old root split
+            DataBox orphanKey = result.get().getFirst();
+            Long orphanNodePageNum = result.get().getSecond();
+            BPlusNode newRoot = getNewRoot(orphanKey, orphanNodePageNum);
+
+            updateRoot(newRoot);
+        }
         return;
     }
 
