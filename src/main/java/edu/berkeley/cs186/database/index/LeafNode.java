@@ -216,7 +216,7 @@ class LeafNode extends BPlusNode {
         // TODO(proj2): implement
         int index = Collections.binarySearch(getKeys(), key);
 
-        if (index == -1) {
+        if (index < 0) {
             return; // Key not found
         }
 
@@ -421,8 +421,8 @@ class LeafNode extends BPlusNode {
         Buffer buf = page.getBuffer();
         byte nodeType = buf.get();
         assert(nodeType == (byte) 1);
-        Optional<Long> rightSibling = Optional.of(buf.getLong());
-
+        long rightSiblingPageNum = buf.getLong();
+        Optional<Long> rightSibling = rightSiblingPageNum == -1 ? Optional.empty() : Optional.of(rightSiblingPageNum);
         List<DataBox> keys = new ArrayList<>();
         List<RecordId> rids = new ArrayList<>();
         int n = buf.getInt();

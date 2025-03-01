@@ -466,6 +466,9 @@ public class TestBPlusTree {
                     fromDisk.remove(key);
                     assertEquals(Optional.empty(), fromDisk.get(key));
                 }
+
+                // Assert Tree is empty
+                assertFalse(fromDisk.scanAll().hasNext());
             }
         }
     }

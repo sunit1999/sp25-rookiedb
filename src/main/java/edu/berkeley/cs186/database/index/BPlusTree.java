@@ -209,7 +209,8 @@ public class BPlusTree {
 
         // TODO(proj2): Return a BPlusTreeIterator.
 
-        return Collections.emptyIterator();
+        LeafNode leafNode = root.getLeftmostLeaf();
+        return new BPlusTreeIterator(leafNode, leafNode.scanAll());
     }
 
     /**
@@ -241,8 +242,8 @@ public class BPlusTree {
         LockUtil.ensureSufficientLockHeld(lockContext, LockType.NL);
 
         // TODO(proj2): Return a BPlusTreeIterator.
-
-        return Collections.emptyIterator();
+        LeafNode leafNode = root.get(key);
+        return new BPlusTreeIterator(leafNode, leafNode.scanGreaterEqual(key));
     }
 
     /**
@@ -453,10 +454,22 @@ public class BPlusTree {
     // Iterator ////////////////////////////////////////////////////////////////
     private class BPlusTreeIterator implements Iterator<RecordId> {
         // TODO(proj2): Add whatever fields and constructors you want here.
+        LeafNode current;
+        Iterator<RecordId> itr;
+        BPlusTreeIterator(LeafNode _current, Iterator<RecordId> _itr) {
+            current = _current;
+            itr = _itr;
+        }
 
         @Override
         public boolean hasNext() {
             // TODO(proj2): implement
+            if (current != null) {
+                if (itr.hasNext()) return true;
+                if (current.getRightSibling().isPresent()) {
+                    return current.getRightSibling().get().scanAll().hasNext();
+                }
+            }
 
             return false;
         }
@@ -464,8 +477,16 @@ public class BPlusTree {
         @Override
         public RecordId next() {
             // TODO(proj2): implement
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
 
-            throw new NoSuchElementException();
+            if (itr.hasNext()) return itr.next();
+
+            current = current.getRightSibling().get();
+            itr = current.scanAll();
+
+            return itr.next();
         }
     }
 }
