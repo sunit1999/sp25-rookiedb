@@ -87,7 +87,13 @@ public class BNLJOperator extends JoinOperator {
          * Make sure you pass in the correct schema to this method.
          */
         private void fetchNextLeftBlock() {
-            // TODO(proj3_part1): implement
+            leftBlockIterator = getBlockIterator(leftSourceIterator, getLeftSource().getSchema(), numBuffers - 2);
+            if (leftBlockIterator.hasNext()) {
+                leftBlockIterator.markNext();
+                leftRecord = leftBlockIterator.next();
+            } else {
+                leftRecord = null;
+            }
         }
 
         /**
@@ -102,7 +108,8 @@ public class BNLJOperator extends JoinOperator {
          * Make sure you pass in the correct schema to this method.
          */
         private void fetchNextRightPage() {
-            // TODO(proj3_part1): implement
+            rightPageIterator = getBlockIterator(rightSourceIterator, getRightSource().getSchema(), 1);
+            rightPageIterator.markNext();
         }
 
         /**
@@ -114,8 +121,41 @@ public class BNLJOperator extends JoinOperator {
          * of JoinOperator).
          */
         private Record fetchNextRecord() {
-            // TODO(proj3_part1): implement
-            return null;
+            // If there are no more left records, we're done
+            if (leftRecord == null)
+                return null;
+
+            while (true) {
+                // Try to match the current left record with the next right record in the current page
+                if (rightPageIterator.hasNext()) {
+                    Record rightRecord = rightPageIterator.next();
+                    if (compare(leftRecord, rightRecord) == 0) {
+                        // Match found
+                        return leftRecord.concat(rightRecord);
+                    }
+                }
+                // Move to the next left record in the current block
+                else if (leftBlockIterator.hasNext()) {
+                    rightPageIterator.reset();
+                    leftRecord = leftBlockIterator.next();
+                }
+                // Move to the next right page and reset left block
+                else if (rightSourceIterator.hasNext()) {
+                    fetchNextRightPage();
+                    leftBlockIterator.reset();
+                    leftRecord = leftBlockIterator.next();
+                }
+                // Move to the next left block and restart right side
+                else if (leftSourceIterator.hasNext()) {
+                    fetchNextLeftBlock();
+                    rightSourceIterator.reset();
+                    fetchNextRightPage();
+                }
+                // No more records to join
+                else {
+                    return null;
+                }
+            }
         }
 
         /**
