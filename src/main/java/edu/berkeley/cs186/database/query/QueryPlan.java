@@ -649,7 +649,6 @@ public class QueryPlan {
             Map<Set<String>, QueryOperator> prevMap,
             Map<Set<String>, QueryOperator> pass1Map) {
         Map<Set<String>, QueryOperator> result = new HashMap<>();
-        // TODO(proj3_part2): implement
         // We provide a basic description of the logic you have to implement:
         // For each set of tables in prevMap
         //   For each join predicate listed in this.joinPredicates
@@ -665,6 +664,32 @@ public class QueryPlan {
         //      calculate the cheapest join with the new table (the one you
         //      fetched an operator for from pass1Map) and the previously joined
         //      tables. Then, update the result map if needed.
+        for (Set<String> tableSet: prevMap.keySet()) {
+            for (JoinPredicate predicate: this.joinPredicates) {
+                // Case 1
+                if (tableSet.contains(predicate.leftTable) && !tableSet.contains(predicate.rightTable)) {
+                    QueryOperator leftOp = prevMap.get(tableSet);   // Best Op for joining all tableSet tables.
+                    QueryOperator rightOp = pass1Map.get(Collections.singleton(predicate.rightTable));  // Best Op to access new Table
+                    QueryOperator passIOp = minCostJoinType(leftOp, rightOp, predicate.leftColumn, predicate.rightColumn);  // Best Join Op to join them
+
+                    // Update result: Add {tableSet + new Table} -> Pass i Op
+                    Set<String> passITableSet = new HashSet<>(tableSet);
+                    passITableSet.add(predicate.rightTable);
+                    result.put(passITableSet, passIOp);
+                }
+                // Case 2
+                else if (!tableSet.contains(predicate.leftTable) && tableSet.contains(predicate.rightTable)) {
+                    QueryOperator leftOp = prevMap.get(tableSet);
+                    QueryOperator rightOp = pass1Map.get(Collections.singleton(predicate.leftTable));
+                    QueryOperator passIOp = minCostJoinType(leftOp, rightOp, predicate.rightColumn, predicate.leftColumn);
+
+                    Set<String> passITableSet = new HashSet<>(tableSet);
+                    passITableSet.add(predicate.leftTable);
+                    result.put(passITableSet, passIOp);
+                }
+            }
+        }
+
         return result;
     }
 
