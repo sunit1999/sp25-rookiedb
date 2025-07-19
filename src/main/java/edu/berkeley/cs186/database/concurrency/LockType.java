@@ -21,9 +21,15 @@ public enum LockType {
         if (a == null || b == null) {
             throw new NullPointerException("null lock type");
         }
-        // TODO(proj4_part1): implement
-
-        return false;
+        switch (a) {
+            case NL: return true;
+            case IS: return b != X;
+            case IX: return b == NL || b == IS || b == IX;
+            case S: return b == NL || b == IS || b == S;
+            case SIX: return b == NL || b == IS;
+            case X: return b == NL;
+            default: throw new UnsupportedOperationException("bad lock type");
+        }
     }
 
     /**
@@ -53,9 +59,17 @@ public enum LockType {
         if (parentLockType == null || childLockType == null) {
             throw new NullPointerException("null lock type");
         }
-        // TODO(proj4_part1): implement
-
-        return false;
+        switch (childLockType) {
+            case NL: return true;
+            case S:
+            case IS:
+                return parentLockType == IS || parentLockType == IX;
+            case X:
+            case IX:
+            case SIX:
+                return parentLockType == IX || parentLockType == SIX;
+            default: throw new UnsupportedOperationException("bad lock type");
+        }
     }
 
     /**
@@ -68,9 +82,21 @@ public enum LockType {
         if (required == null || substitute == null) {
             throw new NullPointerException("null lock type");
         }
-        // TODO(proj4_part1): implement
 
-        return false;
+        // Same locks always substitutable
+        if (required == substitute) return true;
+
+        switch (required) {
+            // No one can substitute NL, X and SIX
+            case NL:
+            case X:
+            case SIX:
+                return false;
+            case S: return substitute == X || substitute == SIX;
+            case IS: return substitute == IX;
+            case IX: return substitute == SIX;
+            default: throw new UnsupportedOperationException("bad lock type");
+        }
     }
 
     /**
