@@ -1,12 +1,15 @@
 package edu.berkeley.cs186.database.concurrency;
 
 import edu.berkeley.cs186.database.TransactionContext;
+import edu.berkeley.cs186.database.common.Pair;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static edu.berkeley.cs186.database.concurrency.LockType.*;
 
 /**
  * LockContext wraps around LockManager to provide the hierarchical structure
@@ -95,9 +98,28 @@ public class LockContext {
      */
     public void acquire(TransactionContext transaction, LockType lockType)
             throws InvalidLockException, DuplicateLockRequestException {
-        // TODO(proj4_part2): implement
+        if (readonly) {
+            throw new UnsupportedOperationException("LockContext is readonly");
+        }
 
-        return;
+        if (parent != null && !LockType.canBeParentLock(parent.getEffectiveLockType(transaction), lockType)) {
+            throw new InvalidLockException("MGL constraints violated");
+        }
+
+        if (lockType.equals(NL)) {
+            throw new InvalidLockException("NL cannot be acquired");
+        }
+
+        if (lockman.getLockType(transaction, name).equals(lockType)) {
+            throw new DuplicateLockRequestException("Duplicate lock request");
+        }
+
+        lockman.acquire(transaction, name, lockType);
+
+        if (parent != null) {
+            int currentCount = parent.getNumChildren(transaction);
+            parent.numChildLocks.put(transaction.getTransNum(), currentCount + 1);
+        }
     }
 
     /**
@@ -113,9 +135,40 @@ public class LockContext {
      */
     public void release(TransactionContext transaction)
             throws NoLockHeldException, InvalidLockException {
-        // TODO(proj4_part2): implement
+        if (readonly) {
+            throw new UnsupportedOperationException("LockContext is readonly");
+        }
 
-        return;
+        LockType explicit = getExplicitLockType(transaction);
+
+        if (explicit == NL) {
+            throw new NoLockHeldException("");
+        }
+
+        List<Lock> locks = lockman.getLocks(transaction);
+
+        if (explicit == IS) {
+            for (Lock lock: locks) {
+                if ((lock.lockType == IS || lock.lockType == S) && lock.name.isDescendantOf(name)) {
+                    throw new InvalidLockException("MGL constraints violated");
+                }
+            }
+        }
+
+        if (explicit == IX) {
+            for (Lock lock: locks) {
+                if ((lock.lockType == IX || lock.lockType == X) && lock.name.isDescendantOf(name)) {
+                    throw new InvalidLockException("MGL constraints violated");
+                }
+            }
+        }
+
+        lockman.release(transaction, name);
+
+        if (parent != null) {
+            int currentCount = parent.getNumChildren(transaction);
+            parent.numChildLocks.put(transaction.getTransNum(), currentCount - 1);
+        }
     }
 
     /**
@@ -139,9 +192,54 @@ public class LockContext {
      */
     public void promote(TransactionContext transaction, LockType newLockType)
             throws DuplicateLockRequestException, NoLockHeldException, InvalidLockException {
-        // TODO(proj4_part2): implement
+        if (readonly) {
+            throw new UnsupportedOperationException("LockContext is readonly");
+        }
 
-        return;
+        LockType explicit = getExplicitLockType(transaction);
+
+        if (explicit == NL) {
+            throw new NoLockHeldException("");
+        }
+
+        if (explicit == newLockType) {
+            throw new DuplicateLockRequestException("");
+        }
+
+        boolean isSubstitutable = LockType.substitutable(newLockType, explicit);
+
+        // Can substitute a lock
+        if (!isSubstitutable) {
+            throw new InvalidLockException("Not a promotion");
+        }
+
+        // Check integrity constraints
+        if (parent != null) {
+            LockType parentLock = parent.getEffectiveLockType(transaction);
+            boolean promotionAllowed = LockType.canBeParentLock(parentLock, newLockType);
+
+            if (!promotionAllowed) {
+                throw new InvalidLockException("MGL constraints violated");
+            }
+        }
+
+        // Handle special needs of SIX lock
+        if (newLockType == SIX) {
+            // Ancestor already has SIX lock
+            if (hasSIXAncestor(transaction)) {
+                throw new InvalidLockException("Redundant promotion");
+            }
+
+            // Need to release all S/IS descendants
+            List<ResourceName> sisDescendants = sisDescendants(transaction);
+            sisDescendants.add(name);
+
+            // Use acquireAndRelease for one Atomic operation
+            lockman.acquireAndRelease(transaction, name, newLockType, sisDescendants);
+        } else {
+            // Promote lock
+            lockman.promote(transaction, name, newLockType);
+        }
     }
 
     /**
@@ -178,7 +276,54 @@ public class LockContext {
      * @throws UnsupportedOperationException if context is readonly
      */
     public void escalate(TransactionContext transaction) throws NoLockHeldException {
-        // TODO(proj4_part2): implement
+        if (readonly) {
+            throw new UnsupportedOperationException("LockContext is readonly");
+        }
+
+        LockType explicit = getExplicitLockType(transaction);
+
+        if (explicit == NL) {
+            throw new NoLockHeldException("");
+        }
+
+        // All descendants having locks other than NL
+        List<ResourceName> allDescendants = new ArrayList<>();
+
+        // Least permissive new lock. Always a regular lock
+        LockType newLockType = S;
+        if (explicit == X || explicit == IX || explicit == SIX) {
+            newLockType = X;
+        }
+
+        // Get all locks of this transaction
+        List<Lock> allLocks = lockman.getLocks(transaction);
+
+        // Find all descendants
+        for (Lock lock: allLocks) {
+            if (lock.lockType != NL && lock.name.isDescendantOf(name)) {
+                allDescendants.add(lock.name);
+
+                // Find the best possible newLock
+                if (lock.lockType == X || lock.lockType == IX || lock.lockType == SIX) {
+                    newLockType = X;
+                }
+            }
+        }
+
+        // No point of escalating if current level already has that lock
+        if (newLockType == explicit) {
+            return;
+        }
+
+        // Add current resource also before acquireAndRelease
+        allDescendants.add(name);
+
+        // Acquire new lock at current level and release locks on all descendants
+        lockman.acquireAndRelease(transaction, name, newLockType, allDescendants);
+
+        // Update child lock count of current level
+        int currentCount = getNumChildren(transaction);
+        numChildLocks.put(transaction.getTransNum(), currentCount - (allDescendants.size() - 1));
 
         return;
     }
@@ -188,9 +333,8 @@ public class LockContext {
      * lock is held at this level.
      */
     public LockType getExplicitLockType(TransactionContext transaction) {
-        if (transaction == null) return LockType.NL;
-        // TODO(proj4_part2): implement
-        return LockType.NL;
+        if (transaction == null) return NL;
+        return lockman.getLockType(transaction, name);
     }
 
     /**
@@ -201,8 +345,23 @@ public class LockContext {
      */
     public LockType getEffectiveLockType(TransactionContext transaction) {
         if (transaction == null) return LockType.NL;
-        // TODO(proj4_part2): implement
-        return LockType.NL;
+
+        LockType explicit = getExplicitLockType(transaction);
+
+        // Case 1: explicit S or X always wins
+        if (explicit == S || explicit == X) return explicit;
+
+        // Case 2: no explicit lock → may inherit S/X from parent
+        if (explicit == NL && parent != null) {
+            LockType parentEff = parent.getEffectiveLockType(transaction);
+            if (parentEff == S || parentEff == X) return parentEff;
+        }
+
+        // Case 3: IS under a SIX ancestor is effectively S
+        if (explicit == IS && hasSIXAncestor(transaction)) return S;
+
+        // Case 4: otherwise, just the explicit type (maybe NL, IS, IX, SIX)
+        return explicit;
     }
 
     /**
@@ -212,8 +371,12 @@ public class LockContext {
      * @return true if holds a SIX at an ancestor, false if not
      */
     private boolean hasSIXAncestor(TransactionContext transaction) {
-        // TODO(proj4_part2): implement
-        return false;
+        if (parent == null) return false;
+        if (parent.getExplicitLockType(transaction) == LockType.SIX) {
+            return true;
+        }
+
+        return parent.hasSIXAncestor(transaction);
     }
 
     /**
@@ -224,8 +387,19 @@ public class LockContext {
      * holds an S or IS lock.
      */
     private List<ResourceName> sisDescendants(TransactionContext transaction) {
-        // TODO(proj4_part2): implement
-        return new ArrayList<>();
+        List<ResourceName> sisDescendants = new ArrayList<>();
+
+        // Get all locks of this transaction
+        List<Lock> allLocks = lockman.getLocks(transaction);
+
+        for (Lock lock: allLocks) {
+            // Only consider IS/S which are descendants of current resource
+            if ((lock.lockType == IS || lock.lockType == S) && lock.name.isDescendantOf(name)) {
+                sisDescendants.add(lock.name);
+            }
+        }
+
+        return sisDescendants;
     }
 
     /**

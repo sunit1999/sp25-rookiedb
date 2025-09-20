@@ -93,7 +93,7 @@ public enum LockType {
             case SIX:
                 return false;
             case S: return substitute == X || substitute == SIX;
-            case IS: return substitute == IX;
+            case IS: return substitute == IX || substitute == SIX;
             case IX: return substitute == SIX;
             default: throw new UnsupportedOperationException("bad lock type");
         }
