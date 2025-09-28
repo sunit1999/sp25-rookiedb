@@ -41,9 +41,81 @@ public class LockUtil {
         LockType effectiveLockType = lockContext.getEffectiveLockType(transaction);
         LockType explicitLockType = lockContext.getExplicitLockType(transaction);
 
-        // TODO(proj4_part2): implement
+        // Case 1
+        if (LockType.substitutable(effectiveLockType, requestType)) {
+            return;
+        }
+
+        // Case 2
+        if (effectiveLockType.equals(LockType.IX) && requestType.equals(LockType.S)) {
+            // Ensure parent has IX/SIX lock before promotion
+            if (!(
+                    parentContext.getEffectiveLockType(transaction).equals(LockType.IX)
+                            || parentContext.getEffectiveLockType(transaction).equals(LockType.SIX))
+            ) {
+                // add intent locks to parent
+                addIntentLock(transaction, lockContext, LockType.IX);
+            }
+            // Promote to SIX
+            lockContext.promote(transaction, LockType.SIX);
+            return;
+        }
+
+        // Case 3
+        if (explicitLockType.isIntent()) {
+            lockContext.escalate(transaction);
+            return;
+        }
+
+        // Case 4
+        if (explicitLockType.equals(LockType.S)) {
+            // S -> X
+            if (parentContext != null && !LockType.canBeParentLock(parentContext.getEffectiveLockType(transaction), requestType)) {
+                addIntentLock(transaction, parentContext, LockType.IX);
+            }
+            lockContext.promote(transaction, requestType);
+        }
+        else {
+            // NL -> S/X
+            if (parentContext != null && !LockType.canBeParentLock(parentContext.getEffectiveLockType(transaction), requestType)) {
+                LockType intentLockType = requestType.equals(LockType.S) ? LockType.IS : LockType.IX;
+                addIntentLock(transaction, parentContext, intentLockType);
+            }
+            lockContext.acquire(transaction, requestType);
+        }
+
         return;
     }
 
-    // TODO(proj4_part2) add any helper methods you want
+    private static void addIntentLock(TransactionContext transaction, LockContext lockContext, LockType lockType) {
+        LockContext parent = lockContext.parentContext();
+
+        if (parent != null) {
+            LockType parentLockType = parent.getEffectiveLockType(transaction);
+            switch (lockType) {
+                case IS:
+                    if (parentLockType.equals(LockType.NL)) {
+                        addIntentLock(transaction, parent, LockType.IS);
+                    }
+                    break;
+                case IX:
+                    if (parentLockType.equals(LockType.NL) || parentLockType.equals(LockType.IS)) {
+                        addIntentLock(transaction, parent, LockType.IX);
+                    }
+                    break;
+                default:
+                    throw new InvalidLockException("parentContext only allow intent locks");
+            }
+        }
+
+        LockType explicit = lockContext.getExplicitLockType(transaction);
+
+        if (explicit == LockType.NL) {
+            lockContext.acquire(transaction, lockType);
+        } else if (explicit == LockType.IS && lockType == LockType.IX) {
+            lockContext.promote(transaction, lockType);
+        } else if (explicit == LockType.S && lockType == LockType.IX) {
+            lockContext.promote(transaction, LockType.SIX);
+        }
+    }
 }
