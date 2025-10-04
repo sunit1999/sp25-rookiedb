@@ -930,7 +930,13 @@ public class Database implements AutoCloseable {
         @Override
         public void close() {
             try {
-                // TODO(proj4_part2)
+                List<Lock> allLocks = lockManager.getLocks(this);
+                // Release the earliest acquired lock first
+                for (int i = allLocks.size() - 1; i >= 0; i--) {
+                    Lock lock = allLocks.get(i);
+                    LockContext lockContext = LockContext.fromResourceName(lockManager, lock.name);
+                    lockContext.release(this);
+                }
                 return;
             } catch (Exception e) {
                 // There's a chance an error message from your release phase
