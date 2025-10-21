@@ -92,8 +92,27 @@ public class ARIESRecoveryManager implements RecoveryManager {
      */
     @Override
     public long commit(long transNum) {
-        // TODO(proj5): implement
-        return -1L;
+        TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+
+        // Ensure Xact exist in Xact table
+        assert (transactionEntry != null);
+
+        long prevLSN = transactionEntry.lastLSN;
+
+        // Create and append log record
+        LogRecord logRecord = new CommitTransactionLogRecord(transNum, prevLSN);
+        long LSN = logManager.appendToLog(logRecord);
+
+        // Flush log
+        logManager.flushToLSN(LSN);
+
+        // Update Xact status
+        transactionEntry.transaction.setStatus(Transaction.Status.COMMITTING);
+
+        // Update lastLSN
+        transactionEntry.lastLSN = LSN;
+
+        return LSN;
     }
 
     /**
@@ -108,8 +127,24 @@ public class ARIESRecoveryManager implements RecoveryManager {
      */
     @Override
     public long abort(long transNum) {
-        // TODO(proj5): implement
-        return -1L;
+        TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+
+        // Ensure Xact exist in Xact table
+        assert (transactionEntry != null);
+
+        long prevLSN = transactionEntry.lastLSN;
+
+        // Create and append log record
+        LogRecord logRecord = new AbortTransactionLogRecord(transNum, prevLSN);
+        long LSN = logManager.appendToLog(logRecord);
+
+        // Update Xact status
+        transactionEntry.transaction.setStatus(Transaction.Status.ABORTING);
+
+        // Update lastLSN
+        transactionEntry.lastLSN = LSN;
+
+        return LSN;
     }
 
     /**
@@ -126,8 +161,36 @@ public class ARIESRecoveryManager implements RecoveryManager {
      */
     @Override
     public long end(long transNum) {
-        // TODO(proj5): implement
-        return -1L;
+        TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+
+        // Ensure Xact exist in Xact table
+        assert (transactionEntry != null);
+
+        // Rollback the Xact if its aborting
+        if (transactionEntry.transaction.getStatus().equals(Transaction.Status.ABORTING)) {
+            // Use LSN as 0 while rolling back to cover complete history of given Xact
+            rollbackToLSN(transNum, 0);
+        }
+
+        long prevLSN = transactionEntry.lastLSN;
+
+        // Create and append log record
+        LogRecord logRecord = new EndTransactionLogRecord(transNum, prevLSN);
+        long LSN = logManager.appendToLog(logRecord);
+
+        // Flush log
+        logManager.flushToLSN(LSN);
+
+        // Update lastLSN
+        transactionEntry.lastLSN = prevLSN;
+
+        // Update Xact status
+        transactionEntry.transaction.setStatus(Transaction.Status.COMPLETE);
+
+        // Remove Xact from table
+        transactionTable.remove(transNum);
+
+        return LSN;
     }
 
     /**
@@ -154,7 +217,32 @@ public class ARIESRecoveryManager implements RecoveryManager {
         // Small optimization: if the last record is a CLR we can start rolling
         // back from the next record that hasn't yet been undone.
         long currentLSN = lastRecord.getUndoNextLSN().orElse(lastRecordLSN);
-        // TODO(proj5) implement the rollback logic described above
+
+        // latestLSN moves forward tracking latest LSN appended by current Xact
+        // currentLSN moves backward tracking next LSN to be undone
+        long latestLSN = currentLSN;
+        while (currentLSN > LSN) {
+            LogRecord currentRecord = logManager.fetchLogRecord(currentLSN);
+
+            // Only UPDATE log type is undoable
+            if (currentRecord.isUndoable()) {
+                LogRecord CLR = currentRecord.undo(latestLSN);
+                latestLSN = logManager.appendToLog(CLR);
+
+                // Always update lastLSN when log is appended
+                transactionEntry.lastLSN = latestLSN;
+
+                // CLR restores the state of the record to original
+                CLR.redo(this, diskSpaceManager, bufferManager);
+            }
+
+            // No more LSNs to rollback
+            if (!currentRecord.getPrevLSN().isPresent()) {
+                break;
+            } else {
+                currentLSN = currentRecord.getPrevLSN().get();
+            }
+        }
     }
 
     /**
