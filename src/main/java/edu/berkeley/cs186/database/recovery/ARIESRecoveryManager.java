@@ -1,6 +1,7 @@
 package edu.berkeley.cs186.database.recovery;
 
 import edu.berkeley.cs186.database.Transaction;
+import edu.berkeley.cs186.database.TransactionContext;
 import edu.berkeley.cs186.database.common.Pair;
 import edu.berkeley.cs186.database.concurrency.DummyLockContext;
 import edu.berkeley.cs186.database.io.DiskSpaceManager;
@@ -178,9 +179,6 @@ public class ARIESRecoveryManager implements RecoveryManager {
         LogRecord logRecord = new EndTransactionLogRecord(transNum, prevLSN);
         long LSN = logManager.appendToLog(logRecord);
 
-        // Flush log
-        logManager.flushToLSN(LSN);
-
         // Update lastLSN
         transactionEntry.lastLSN = prevLSN;
 
@@ -292,8 +290,22 @@ public class ARIESRecoveryManager implements RecoveryManager {
                              byte[] after) {
         assert (before.length == after.length);
         assert (before.length <= BufferManager.EFFECTIVE_PAGE_SIZE / 2);
-        // TODO(proj5): implement
-        return -1L;
+        TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+        assert(transactionEntry != null);
+
+        long prevLSN = transactionEntry.lastLSN;
+
+        // Create log record
+        LogRecord record = new UpdatePageLogRecord(transNum, pageNum, prevLSN, pageOffset, before, after);
+        long LSN = logManager.appendToLog(record);
+
+        // Update lastLSN
+        transactionEntry.lastLSN = LSN;
+
+        // Update DPT
+        dirtyPageTable.putIfAbsent(pageNum, LSN);
+
+        return LSN;
     }
 
     /**
