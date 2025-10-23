@@ -13,6 +13,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
+import static java.lang.Math.max;
+
 /**
  * Implementation of ARIES.
  */
@@ -648,7 +650,144 @@ public class ARIESRecoveryManager implements RecoveryManager {
         long LSN = masterRecord.lastCheckpointLSN;
         // Set of transactions that have completed
         Set<Long> endedTransactions = new HashSet<>();
-        // TODO(proj5): implement
+
+        // Start scanning the log from most recent BEGIN_CHECKPOINT
+        Iterator<LogRecord> logRecordIterator = logManager.scanFrom(LSN);
+        while (logRecordIterator.hasNext()) {
+            LogRecord currentRecord = logRecordIterator.next();
+
+            assert (currentRecord != null);
+
+            // Case1: Current Record is Xact related
+            if (currentRecord.getTransNum().isPresent()) {
+                // Add new Xact in Xact table if not present
+                long transNum = currentRecord.getTransNum().get();
+                transactionTable.putIfAbsent(transNum, new TransactionTableEntry(newTransaction.apply(transNum)));
+
+                // Update lastLSN of Xact
+                TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+                transactionEntry.lastLSN = currentRecord.getLSN();
+
+                // Case3: Current Record is Xact status related
+                switch (currentRecord.getType()) {
+                    case COMMIT_TRANSACTION: {
+                        transactionEntry.transaction.setStatus(Transaction.Status.COMMITTING);
+                        break;
+                    }
+                    case ABORT_TRANSACTION: {
+                        transactionEntry.transaction.setStatus(Transaction.Status.RECOVERY_ABORTING);
+                        break;
+                    }
+                    case END_TRANSACTION: {
+                        // Cleanup
+                        transactionEntry.transaction.cleanup();
+                        // Update the status
+                        transactionEntry.transaction.setStatus(Transaction.Status.COMPLETE);
+                        // Remove from Xact table
+                        transactionTable.remove(transNum);
+                        // Keep track of completed Xacts
+                        endedTransactions.add(transNum);
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
+                }
+            }
+
+            // Case2: Current Record is Page related
+            if (currentRecord.getPageNum().isPresent()) {
+                switch (currentRecord.getType()) {
+                    case UPDATE_PAGE:
+                    case UNDO_UPDATE_PAGE: {
+                        dirtyPageTable.putIfAbsent(currentRecord.getPageNum().get(), currentRecord.getLSN());
+                        break;
+                    }
+                    case FREE_PAGE:
+                    case UNDO_ALLOC_PAGE: {
+                        dirtyPageTable.remove(currentRecord.getPageNum().get());
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
+                }
+            }
+
+            // Case4: Current Record is End Checkpoint
+            if (currentRecord.getType() == LogType.END_CHECKPOINT) {
+                EndCheckpointLogRecord endCheckpointRecord = (EndCheckpointLogRecord) currentRecord;
+
+                // DPT entries of checkpoint record are more accurate
+                dirtyPageTable.putAll(endCheckpointRecord.getDirtyPageTable());
+
+                // Update Xact table
+                for (Map.Entry<Long, Pair<Transaction.Status, Long>> entry: endCheckpointRecord.getTransactionTable().entrySet()) {
+                    long transNum = entry.getKey();
+
+                    // Ignore complete Xacts
+                    if (endedTransactions.contains(transNum)) continue;
+
+                    // Add Xact to Xact table if not present
+                    transactionTable.putIfAbsent(transNum, new TransactionTableEntry(newTransaction.apply(transNum)));
+                    TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+
+                    // Update lastLSN of Xact, if checkpoint has high lastLSN
+                    transactionEntry.lastLSN = max(transactionEntry.lastLSN, entry.getValue().getSecond());
+
+                    // Update Xact status if its more advanced in checkpoint record
+                    if (transactionEntry.transaction.getStatus().ordinal() < entry.getValue().getFirst().ordinal()) {
+                        // Use RECOVERY_ABORTING instead of ABORTING during restart
+                        Transaction.Status status = entry.getValue().getFirst() == Transaction.Status.ABORTING
+                                ? Transaction.Status.RECOVERY_ABORTING
+                                : entry.getValue().getFirst();
+
+                        transactionEntry.transaction.setStatus(status);
+                    }
+                }
+            }
+        }
+
+        // Final processing of Xact table
+        Iterator<Map.Entry<Long, TransactionTableEntry>> transactionIterator = transactionTable.entrySet().iterator();
+        while (transactionIterator.hasNext()) {
+            Map.Entry<Long, TransactionTableEntry> entry = transactionIterator.next();
+            long transNum = entry.getKey();
+            TransactionTableEntry transactionEntry = entry.getValue();
+
+            switch (transactionEntry.transaction.getStatus()) {
+                case COMMITTING: {
+                    // Cleanup
+                    transactionEntry.transaction.cleanup();
+                    // Update the status
+                    transactionEntry.transaction.setStatus(Transaction.Status.COMPLETE);
+                    // Log an EndTransaction
+                    LogRecord logRecord = new EndTransactionLogRecord(transNum, transactionEntry.lastLSN);
+                    long lsn = logManager.appendToLog(logRecord);
+                    // Update lastLSN
+                    transactionEntry.lastLSN = lsn;
+
+                    // Remove from Xact table
+                    transactionIterator.remove();
+                    break;
+                }
+
+                case RUNNING: {
+                    transactionEntry.transaction.setStatus(Transaction.Status.RECOVERY_ABORTING);
+                    // Log an AbortTransaction
+                    LogRecord logRecord = new AbortTransactionLogRecord(transNum, transactionEntry.lastLSN);
+                    long lsn = logManager.appendToLog(logRecord);
+                    // Update lastLSN
+                    transactionEntry.lastLSN = lsn;
+                    break;
+                }
+
+                default: {
+                    break;
+                }
+            }
+        }
+
         return;
     }
 
