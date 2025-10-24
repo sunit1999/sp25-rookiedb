@@ -183,7 +183,7 @@ public class ARIESRecoveryManager implements RecoveryManager {
         long LSN = logManager.appendToLog(logRecord);
 
         // Update lastLSN
-        transactionEntry.lastLSN = prevLSN;
+        transactionEntry.lastLSN = LSN;
 
         // Update Xact status
         transactionEntry.transaction.setStatus(Transaction.Status.COMPLETE);
@@ -898,7 +898,59 @@ public class ARIESRecoveryManager implements RecoveryManager {
      *   and remove from transaction table.
      */
     void restartUndo() {
-        // TODO(proj5): implement
+        PriorityQueue<Long> toUndo = new PriorityQueue<>(Collections.reverseOrder());
+        // At this point, Xact table only contains aborting Xacts
+        for (TransactionTableEntry entry : transactionTable.values()) {
+            toUndo.add(entry.lastLSN);
+        }
+
+        while (!toUndo.isEmpty()) {
+            LogRecord currentRecord = logManager.fetchLogRecord(toUndo.poll());
+
+            // Undo UPDATE Records
+            if (currentRecord.isUndoable()) {
+                long transNum = currentRecord.getTransNum().get();
+                TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+
+                LogRecord CLR = currentRecord.undo(transactionEntry.lastLSN);
+                long LSN = logManager.appendToLog(CLR);
+
+                // Update lastLSN
+                transactionEntry.lastLSN = LSN;
+
+                // CLR restores the state of the record to original
+                CLR.redo(this, diskSpaceManager, bufferManager);
+            }
+
+            // Add undoNextLSN if not prevLSN to heap, otherwise END the current record's Xact
+            if (currentRecord.getUndoNextLSN().isPresent()) {
+                toUndo.add(currentRecord.getUndoNextLSN().get());
+            }
+            else if (currentRecord.getPrevLSN().isPresent() && currentRecord.getPrevLSN().get() != 0) {
+                toUndo.add(currentRecord.getPrevLSN().get());
+            }
+            else if (currentRecord.getTransNum().isPresent()) {
+                long transNum = currentRecord.getTransNum().get();
+                TransactionTableEntry transactionEntry = transactionTable.get(transNum);
+
+                // Create and append log record
+                LogRecord logRecord = new EndTransactionLogRecord(transNum, transactionEntry.lastLSN);
+                long LSN = logManager.appendToLog(logRecord);
+
+                // Cleanup
+                transactionEntry.transaction.cleanup();
+
+                // Update lastLSN
+                transactionEntry.lastLSN = LSN;
+
+                // Update Xact status
+                transactionEntry.transaction.setStatus(Transaction.Status.COMPLETE);
+
+                // Remove Xact from table
+                transactionTable.remove(transNum);
+            }
+        }
+
         return;
     }
 
