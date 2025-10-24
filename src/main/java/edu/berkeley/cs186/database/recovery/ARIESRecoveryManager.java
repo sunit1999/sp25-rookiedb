@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import static java.lang.Math.max;
+import static java.lang.Math.min;
 
 /**
  * Implementation of ARIES.
@@ -804,7 +805,82 @@ public class ARIESRecoveryManager implements RecoveryManager {
      *   the pageLSN is checked, and the record is redone if needed.
      */
     void restartRedo() {
-        // TODO(proj5): implement
+        // Starting LSN is Smallest recLSN in DPT
+        Optional<Long> LSN = dirtyPageTable.values().stream()
+                .min(Long::compare);
+
+        // DPT itself is empty
+        if (!LSN.isPresent())
+            return;
+
+        // Start scanning the log
+        Iterator<LogRecord> logRecordIterator = logManager.scanFrom(LSN.get());
+        while (logRecordIterator.hasNext()) {
+            LogRecord currentRecord = logRecordIterator.next();
+
+            assert (currentRecord != null);
+
+            // Skip if not redoable
+            if (!currentRecord.isRedoable()) continue;
+
+            switch (currentRecord.getType()) {
+                // Case1: Partition-related
+                case ALLOC_PART:
+                case FREE_PART:
+                case UNDO_ALLOC_PART:
+                case UNDO_FREE_PART:
+                // Case2: Page-Allocation related
+                case ALLOC_PAGE:
+                case UNDO_ALLOC_PAGE: {
+                    currentRecord.redo(this, diskSpaceManager, bufferManager);
+                    break;
+                }
+                // Case3: Page-Modification related
+                case UPDATE_PAGE:
+                case FREE_PAGE:
+                case UNDO_UPDATE_PAGE:
+                case UNDO_FREE_PAGE: {
+                    // Skip if pageNum is missing
+                    if (!currentRecord.getPageNum().isPresent()) {
+                        break;
+                    }
+
+                    long pageNum = currentRecord.getPageNum().get();
+
+                    // Skip if page not in DPT
+                    if (!dirtyPageTable.containsKey(pageNum)) {
+                        break;
+                    }
+
+                    // Skip if LSN < recLSN of the page
+                    if (currentRecord.getLSN() < dirtyPageTable.get(pageNum)) {
+                        break;
+                    }
+
+                    // Get pageLSN from disk
+                    long pageLSN;
+                    Page page = bufferManager.fetchPage(new DummyLockContext(), pageNum);
+                    try {
+                        pageLSN = page.getPageLSN();
+                    } finally {
+                        page.unpin();
+                    }
+
+                    // Skip if disk is more up to date
+                    if (pageLSN >= currentRecord.getLSN()) {
+                        break;
+                    }
+
+                    // All good for redoing
+                    currentRecord.redo(this, diskSpaceManager, bufferManager);
+                    break;
+                }
+                default: {
+                    break;
+                }
+            }
+        }
+
         return;
     }
 
